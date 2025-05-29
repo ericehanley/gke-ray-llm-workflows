@@ -1,4 +1,8 @@
 #!/bin/bash
-jupyter nbconvert --to script README.ipynb  # jupyter will convert even non-python code logic
-ipython README.py  # be sure to use ipython to ensure even non-python cells are executed properly
+
+# don't use nbcovert or jupytext unless you're willing
+# to check each subprocess unit and validate that errors
+# aren't being consumed/hidden
+python ci/nb2py.py README.ipynb README.py  # convert notebook to script
+python README.py  # run generated script
 rm README.py  # remove the generated script
