@@ -237,7 +237,6 @@ Below is an overview of the configuration for our model. We specify:
  * Training hypterparamters
  * Evaluation dataset configuration
 
-```
 <div class="highlight"><pre><span></span><span class="c1">### model</span>
 <span class="nt">model_name_or_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Qwen/Qwen2.5-7B-Instruct</span>
 <span class="nt">trust_remote_code</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
