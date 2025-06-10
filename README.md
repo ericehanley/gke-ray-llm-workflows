@@ -226,7 +226,7 @@ Use [Ray Train](https://docs.ray.io/en/latest/train/train.html) + [LLaMA-Factory
 
 <img src="https://raw.githubusercontent.com/anyscale/foundational-ray-app/refs/heads/main/images/distributed_training.png" width=800>
 
-### `config`
+### lora_sft_ray.yaml
 
 Below is an overview of the configuration for our model. We specify:
  * The model name and 
@@ -237,64 +237,62 @@ Below is an overview of the configuration for our model. We specify:
  * Training hypterparamters
  * Evaluation dataset configuration
 
-<div class="highlight"><pre><span></span><span class="c1">### model</span>
-<span class="nt">model_name_or_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Qwen/Qwen2.5-7B-Instruct</span>
-<span class="nt">trust_remote_code</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+```yaml
+### model
+model_name_or_path: Qwen/Qwen2.5-7B-Instruct
+trust_remote_code: true
 
-<span class="c1">### method</span>
-<span class="nt">stage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">sft</span>
-<span class="nt">do_train</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-<span class="nt">finetuning_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">lora</span>
-<span class="nt">lora_rank</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8</span>
-<span class="nt">lora_target</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">all</span>
+### method
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_rank: 8
+lora_target: all
 
-<span class="c1">### dataset</span>
-<span class="nt">dataset</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">viggo-train</span>
-<span class="nt">dataset_dir</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/mnt/cluster_storage/viggo</span><span class="w">  </span><span class="c1"># shared storage workers have access to</span>
-<span class="nt">template</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">qwen</span>
-<span class="nt">cutoff_len</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2048</span>
-<span class="nt">max_samples</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1000</span>
-<span class="nt">overwrite_cache</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-<span class="nt">preprocessing_num_workers</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">16</span>
-<span class="nt">dataloader_num_workers</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+### dataset
+dataset: viggo-train
+dataset_dir: /mnt/cluster_storage/viggo  # shared storage workers have access to
+template: qwen
+cutoff_len: 2048
+max_samples: 1000
+overwrite_cache: true
+preprocessing_num_workers: 16
+dataloader_num_workers: 4
 
-<span class="c1">### output</span>
-<span class="nt">output_dir</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/mnt/cluster_storage/viggo/outputs</span><span class="w">  </span><span class="c1"># should be somewhere workers have access to (ex. s3, nfs)</span>
-<span class="nt">logging_steps</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span>
-<span class="nt">save_steps</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">500</span>
-<span class="nt">plot_loss</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-<span class="nt">overwrite_output_dir</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-<span class="nt">save_only_model</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+### output
+output_dir: /mnt/cluster_storage/viggo/outputs  # should be somewhere workers have access to (ex. s3, nfs)
+logging_steps: 10
+save_steps: 500
+plot_loss: true
+overwrite_output_dir: true
+save_only_model: false
 
-<span class="c1">### ray</span>
-<span class="nt">ray_run_name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">lora_sft_ray</span>
-<span class="nt">ray_storage_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/mnt/cluster_storage/viggo/saves</span><span class="w">  </span><span class="c1"># should be somewhere workers have access to (ex. s3, nfs)</span>
-<span class="nt">ray_num_workers</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
-<span class="nt">resources_per_worker</span><span class="p">:</span>
-<span class="w">  </span><span class="nt">GPU</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
-<span class="w">  </span><span class="nt">anyscale/accelerator_shape:4xL4</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.001</span><span class="w">  </span><span class="c1"># Use this to specify a specific node shape,</span>
-<span class="w">  </span><span class="c1"># accelerator_type:L4: 1           # Or use this to simply specify a GPU type.</span>
-<span class="w">  </span><span class="c1"># see https://docs.ray.io/en/master/ray-core/accelerator-types.html#accelerator-types for a full list of accelerator types</span>
-<span class="nt">placement_strategy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">PACK</span>
+### ray
+ray_run_name: lora_sft_ray
+ray_storage_path: /mnt/cluster_storage/ray_results
+ray_num_workers: 4
+resources_per_worker:
+  GPU: 1
+placement_strategy: PACK
 
-<span class="c1">### train</span>
-<span class="nt">per_device_train_batch_size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
-<span class="nt">gradient_accumulation_steps</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8</span>
-<span class="nt">learning_rate</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1.0e-4</span>
-<span class="nt">num_train_epochs</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5.0</span>
-<span class="nt">lr_scheduler_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">cosine</span>
-<span class="nt">warmup_ratio</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.1</span>
-<span class="nt">bf16</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-<span class="nt">ddp_timeout</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">180000000</span>
-<span class="nt">resume_from_checkpoint</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">null</span>
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 8
+learning_rate: 1.0e-4
+num_train_epochs: 3.0
+lr_scheduler_type: cosine
+warmup_ratio: 0.1
+bf16: true
+ddp_timeout: 180000000
+resume_from_checkpoint: null
 
-<span class="c1">### eval</span>
-<span class="nt">eval_dataset</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">viggo-val</span><span class="w">  </span><span class="c1"># uses same dataset_dir as training data</span>
-<span class="c1"># val_size: 0.1  # only if using part of training data for validation</span>
-<span class="nt">per_device_eval_batch_size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
-<span class="nt">eval_strategy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">steps</span>
-<span class="nt">eval_steps</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">500</span>
-</pre></div>
+### eval
+eval_dataset: viggo-val  # uses same dataset_dir as training data
+# val_size: 0.1  # only if using part of training data for validation
+per_device_eval_batch_size: 1
+eval_strategy: steps
+eval_steps: 500
+```
 
 ### Multi-node training
 
@@ -312,13 +310,11 @@ Using [Ray Train](https://docs.ray.io/en/latest/train/train.html) has several ad
 
 Because our RayCluster is already up and running, we can leverage the ray API to submit a job to the RayCluster just like we did for the data ingestion workload.
 
-
 ```bash
-%%bash
-# Run multi-node distributed fine-tuning workload
 ray job submit --address http://localhost:8265 --working-dir="." -- bash -c "USE_RAY=1 llamafactory-cli train ray-workloads/lora_sft_ray.yaml"
 ```
-
+**Note on the train_launcher.py script:**
+This training workflow is launched via the custom train_launcher.py script instead of *llamafactory-cli* to ensure compatibility with cloud object storage like GCS. The default training command creates a race condition when multiple workers attempt to save checkpoints simultaneously to a GCS Fuse mount. This launcher uses the standard ray.train.torch.TorchTrainer and a custom callback to designate a single worker for writing checkpoints, preventing I/O errors while maintaining compatibility with Ray Train's synchronization protocol.
 
 
     Training started with configuration:
@@ -385,10 +381,6 @@ ray job submit --address http://localhost:8265 --working-dir="." -- bash -c "USE
         │ step                                150 │
         ╰─────────────────────────────────────────╯
         Training saved a checkpoint for iteration 1 at: (local)/mnt/cluster_storage/viggo/saves/lora_sft_ray/TorchTrainer_95d16_00000_0_2025-04-11_14-47-37/checkpoint_000000
-
-
-
-
 
 
 ```python

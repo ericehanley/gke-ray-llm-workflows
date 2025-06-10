@@ -29,12 +29,10 @@ save_only_model: false
 
 ### ray
 ray_run_name: lora_sft_ray
-ray_storage_path: /tmp/ray_results
+ray_storage_path: /mnt/cluster_storage/ray_results
 ray_num_workers: 4
 resources_per_worker:
   GPU: 1
-  # accelerator_type:L4: 1           # Or use this to simply specify a GPU type.
-  # see https://docs.ray.io/en/master/ray-core/accelerator-types.html#accelerator-types for a full list of accelerator types
 placement_strategy: PACK
 
 ### train
@@ -46,6 +44,7 @@ lr_scheduler_type: cosine
 warmup_ratio: 0.1
 bf16: true
 ddp_timeout: 180000000
+ddp_find_unused_parameters: false
 resume_from_checkpoint: null
 
 ### eval

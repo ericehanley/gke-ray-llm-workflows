@@ -90,3 +90,6 @@ ray job submit --address http://localhost:8265 --working_dir: "." -- python ray-
 
 # Submit training job
 ray job submit --address http://localhost:8265 --working-dir="." -- bash -c "USE_RAY=1 llamafactory-cli train ray-workloads/lora_sft_ray.yaml"
+
+ray job submit --address http://localhost:8265 --working-dir="." \
+  -- python ray-workloads/train_launcher.py ray-workloads/lora_sft_ray.yaml 
