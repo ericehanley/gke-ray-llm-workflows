@@ -1,9 +1,4 @@
-# Entity Recognition with LLMs
-
-<div align="left">
-<a target="_blank" href="https://console.anyscale.com/"><img src="https://img.shields.io/badge/🚀 Run_on-Anyscale-9hf"></a>&nbsp;
-<a href="https://github.com/anyscale/e2e-llm-workflows" role="button"><img src="https://img.shields.io/static/v1?label=&amp;message=View%20On%20GitHub&amp;color=586069&amp;logo=github&amp;labelColor=2f363d"></a>&nbsp;
-</div>
+# Entity Recognition with LLMs - Ray on GKE Fork
 
 This end-to-end tutorial **fine-tunes** an LLM to perform **batch inference** and **online serving** at scale. While entity recognition (NER) is the main task in this tutorial, you can easily extend these end-to-end workflows to any use case.
 
@@ -34,20 +29,137 @@ And all of these workloads come with all the observability views you need to deb
 ## Set up
 
 ### Cloud Environment Set Up
-The infrastructure deployment can now be found in configs at **gke-configuration.sh**. You will then need to deploy the **raycluster-deploy.yaml** to the GKE cluster.
+The infrastructure deployment can now be found in configs at **gke-configuration.sh** and is described below.
+The set up assumes you are in an authenticated CLI with requisite permissions. Working from Google Cloud Shell is the easiest way to ensure all required tools are accessible.
 
-### Dependencies
-The Dockerfile and requirements.txt can be used to reliably build an image that provided at *container-images/* 
+Start by cloning this repo to your working environment
+
+```bash
+git clone https://github.com/ericehanley/gke-ray-llm-workflows.git
+```
+
+#### Set Environment Variables
+
+```bash
+export REGION=us-west1
+export ZONE=us-west1-a
+export PROJECT_ID= #Enter Project_ID
+export GKE_VERSION=1.32.2-gke.1297002
+export CLUSTER_NAME= #Enter Cluster Name
+export GSBUCKET= #Enter Bucket Name
+export ARTIFACTREPO= #Enter Artifact Registry Repo Name
+export PROJECT_NUMBER=$(gcloud projects describe ${PROJECT_ID} --format="value(projectNumber)")
+export NAMESPACE=default
+export KSA_NAME= #Enter Kubernetes Service Account Name
+export NUM_NODES=1
+export NUM_GPUS_PER_NODE=4
+```
+
+#### Create GKE Cluster and L4 Node Pool
+
+Note in the GKE Cluster create command, our RayOperator addon automatically handles the installation of the KubeRay operator.
+
+
+```bash
+gcloud container clusters create ${CLUSTER_NAME} \
+    --region=${REGION} \
+    --node-locations=${ZONE} \
+    --cluster-version=${GKE_VERSION} \
+    --machine-type=n2-standard-8 \
+    --num-nodes=1 \
+    --enable-ray-cluster-logging \
+    --enable-ray-cluster-monitoring \
+    --workload-pool=${PROJECT_ID}.svc.id.goog \
+    --addons=RayOperator,GcsFuseCsiDriver
+
+gcloud container node-pools create l4singlenodepool \
+    --accelerator type=nvidia-l4,count=4,gpu-driver-version=latest \
+    --node-version=${GKE_VERSION} \
+    --project=${PROJECT_ID} \
+    --region=${REGION} \
+    --node-locations=${ZONE} \
+    --cluster=${CLUSTER_NAME} \
+    --machine-type=g2-standard-48 \
+    --num-nodes=${NUM_NODES} \
+    --disk-size=200GB
+```
+
+#### Create GCS Bucket and Configure Service Account for Bucket Access
+
+```bash
+# Create Cloud Storage Bucket & Configure
+gcloud storage buckets create gs://${GSBUCKET} \
+    --uniform-bucket-level-access \
+    --location=${REGION}\
+    --enable-hierarchical-namespace
+
+# Create GKE SA
+kubectl create serviceaccount ${KSA_NAME}
+
+# Add permissions to bucket for FUSE CSI driver
+gcloud storage buckets add-iam-policy-binding gs://${GSBUCKET} \
+  --member "principal://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${PROJECT_ID}.svc.id.goog/subject/ns/${NAMESPACE}/sa/${KSA_NAME}" \
+  --role "roles/storage.objectUser"
+```
+
+#### Dependencies
+The Dockerfile and requirements.txt can be used to reliably build an image that works for our demo.
 
 We can use **Cloud Build** and **Artifact Registry** to build and store our container images.
 
-```yaml
+```bash
+# Create repository and image
+gcloud artifacts repositories ${ARTIFACTREPO} \
+    --repository-format=docker \
+    --location=${REGION} \
+    --description="Docker repository for Ray applications"
 
+export CLOUD_BUILD_SA="service-${PROJECT_NUMBER}@gcp-sa-cloudbuild.iam.gserviceaccount.com"
+
+gcloud artifacts repositories add-iam-policy-binding ${ARTIFACTREPO} \
+    --location=${REGION} \
+    --member="serviceAccount:${CLOUD_BUILD_SA}" \
+    --role="roles/artifactregistry.writer"
+
+export IMAGE_NAME="${REGION}-docker.pkg.dev/${PROJECT_ID}/ray-docker-repo/gke-llama-factory:v1"
+
+gcloud builds submit container-image/ --tag $IMAGE_NAME
 ```
 
-## Data ingestion
+#### RayCluster Deployment
+Now we can use the *raycluster-deploy.yaml* file to deploy our RayCluster CRD to our GKE Cluster.
 
-The data ingestion process has been revised in this fork to run as a ray job submitted to our cluster. The job is defined in ingest_data.py:
+**NOTE: You MUST manually update the bucket name, kubernetes service account name, and container image name in the raycluster-deploy.yaml file prior to submitting the manifest.**
+
+```bash
+kubectl apply -f configs/raycluster-deploy.yaml
+```
+#### Leverage Virtual Environment for Ray API Calls
+Now we can activate a virtual environment in our terminal to effectively leverage the ray API.
+
+```bash
+python -m venv myenv
+source myenv/bin/activate
+pip install -U "ray[data,train,tune,serve]"
+```
+
+Finally, we can port-forward to our RayCluster to be able to submit jobs in a separate terminal.
+
+**In current terminal:**
+```bash
+export HEAD_POD=$(kubectl get pods --selector=ray.io/node-type=head,ray.io/cluster=raycluster-demo -o jsonpath='{.items[0].metadata.name}')
+kubectl port-forward $HEAD_POD 8265:8265
+```
+
+**In new terminal (reactivate virtual environment):**
+```bash
+cd gke-ray-llm-workflows
+source myenv/bin/activate
+```
+
+## Data Ingestion
+
+The data ingestion process has been revised in this fork to run as a ray job submitted to our cluster. The job is defined in *ray-workloads/ingest_data.py*:
 
 ```python
 import subprocess
@@ -99,32 +211,12 @@ Below is a single example of the structure of our training data: a JSON file wit
         "output": "give_opinion(name[Diablo II], developer[Blizzard North], rating[good], has_mac_release[yes])"
     }
 
+### Submitting the Data Ingestion Job
+In our new terminal from the set up above, we can now submit our jobs with a simple one line command:
 
-You also have an info file that identifies the datasets and format (Alpaca and ShareGPT formats) to use for post training:
-
-<div class="highlight"><pre><span></span><span class="p">{</span>
-<span class="w">    </span><span class="nt">&quot;viggo-train&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="nt">&quot;file_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/mnt/cluster_storage/viggo/train.jsonl&quot;</span><span class="p">,</span>
-<span class="w">        </span><span class="nt">&quot;formatting&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;alpaca&quot;</span><span class="p">,</span>
-<span class="w">        </span><span class="nt">&quot;columns&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">            </span><span class="nt">&quot;prompt&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;instruction&quot;</span><span class="p">,</span>
-<span class="w">            </span><span class="nt">&quot;query&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;input&quot;</span><span class="p">,</span>
-<span class="w">            </span><span class="nt">&quot;response&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;output&quot;</span>
-<span class="w">        </span><span class="p">}</span>
-<span class="w">    </span><span class="p">},</span>
-<span class="w">    </span><span class="nt">&quot;viggo-val&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="nt">&quot;file_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/mnt/cluster_storage/viggo/val.jsonl&quot;</span><span class="p">,</span>
-<span class="w">        </span><span class="nt">&quot;formatting&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;alpaca&quot;</span><span class="p">,</span>
-<span class="w">        </span><span class="nt">&quot;columns&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">            </span><span class="nt">&quot;prompt&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;instruction&quot;</span><span class="p">,</span>
-<span class="w">            </span><span class="nt">&quot;query&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;input&quot;</span><span class="p">,</span>
-<span class="w">            </span><span class="nt">&quot;response&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;output&quot;</span>
-<span class="w">        </span><span class="p">}</span>
-<span class="w">    </span><span class="p">}</span>
-<span class="p">}</span>
-</pre></div>
-
-
+```bash
+ray job submit --address http://localhost:8265 --working_dir: "." -- python ray-workloads/ingest_data.py
+```
 
 ## Distributed fine-tuning
 
