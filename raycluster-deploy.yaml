@@ -1,0 +1,100 @@
+# ray-cluster.runtime-install.yaml
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: raycluster-demo
+spec:
+  rayVersion: '2.46.0' # Ray version must be consistent across containers
+  headGroupSpec:
+    rayStartParams:
+      num-cpus: "0"
+      dashboard-host: '0.0.0.0'
+    template:
+      metadata:
+        annotations:
+          gke-gcsfuse/volumes: "true"
+          gke-gcsfuse/cpu-limit: "0"
+          gke-gcsfuse/memory-limit: "0"
+          gke-gcsfuse/ephemeral-storage-limit: "0"
+      spec:
+        nodeSelector:
+          cloud.google.com/gke-nodepool: default-pool
+        serviceAccountName: eh-ray-demo
+        volumes:
+        - name: gcs-fuse-volume
+          csi:
+            driver: gcsfuse.csi.storage.gke.io
+            readOnly: false
+            volumeAttributes:
+              bucketName: eh-ray-demo
+              mountOptions: "uid=1000,gid=1000,file-mode=0775,dir-mode=0775,implicit-dirs"
+        containers:
+        - name: ray-head
+          image: us-west1-docker.pkg.dev/diesel-patrol-382622/ray-docker-repo/gke-llama-factory@sha256:cb7d998c4f57ea268fac68f416b2233e984ec7ee5d633e60469fdec439f7043d
+          resources:
+            limits:
+              cpu: "4"
+              memory: "16G"
+            requests:
+              cpu: "4"
+              memory: "16G"
+          ports:
+          - containerPort: 6379
+            name: gcs-server
+          - containerPort: 8265 # Ray dashboard
+            name: dashboard
+          - containerPort: 10001
+            name: client
+          env:
+            - name: HF_HUB_ENABLE_HF_TRANSFER
+              value: "1"
+          volumeMounts:
+          - name: gcs-fuse-volume
+            mountPath: /mnt/cluster_storage
+  workerGroupSpecs:
+  - replicas: 4 # NOTE: 4 workers, 1 per GPU
+    minReplicas: 1
+    maxReplicas: 4
+    groupName: workergroup
+    rayStartParams: {}
+    template:
+      metadata:
+        annotations:
+          gke-gcsfuse/volumes: "true"
+          gke-gcsfuse/cpu-limit: "0"
+          gke-gcsfuse/memory-limit: "0"
+          gke-gcsfuse/ephemeral-storage-limit: "0"
+      spec:
+        nodeSelector:
+          cloud.google.com/gke-nodepool: l4singlenodepool
+        serviceAccountName: eh-ray-demo
+        tolerations:
+        - key: "nvidia.com/gpu"
+          operator: "Exists"
+          effect: "NoSchedule"
+        volumes:
+        - name: gcs-fuse-volume
+          csi:
+            driver: gcsfuse.csi.storage.gke.io
+            readOnly: false
+            volumeAttributes:
+              bucketName: eh-ray-demo
+              mountOptions: "uid=1000,gid=1000,file-mode=0775,dir-mode=0775,implicit-dirs"
+        containers:
+        - name: ray-worker
+          image: us-west1-docker.pkg.dev/diesel-patrol-382622/ray-docker-repo/gke-llama-factory@sha256:cb7d998c4f57ea268fac68f416b2233e984ec7ee5d633e60469fdec439f7043d
+          resources:
+            limits:
+              cpu: "10"
+              memory: "40Gi"
+              nvidia.com/gpu: "1"
+            requests:
+              cpu: "10"
+              memory: "40Gi"
+              nvidia.com/gpu: "1"
+          env:
+            - name: HF_HUB_ENABLE_HF_TRANSFER
+              value: "1"
+          volumeMounts:
+          - name: gcs-fuse-volume
+            mountPath: /mnt/cluster_storage

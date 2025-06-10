@@ -7,7 +7,7 @@
 
 This end-to-end tutorial **fine-tunes** an LLM to perform **batch inference** and **online serving** at scale. While entity recognition (NER) is the main task in this tutorial, you can easily extend these end-to-end workflows to any use case.
 
-This fork has been updated to run specifically on GKE and highlights the specific functionality of KubeRay CRDs.
+**This fork has been updated to run specifically on GKE and highlights the functionality of KubeRay CRDs.**
 
 <img src="https://raw.githubusercontent.com/anyscale/e2e-llm-workflows/refs/heads/main/images/e2e_llm.png" width=800>
 
@@ -33,64 +33,65 @@ And all of these workloads come with all the observability views you need to deb
 
 ## Set up
 
-### Compute
+### Cloud Environment Set Up
 The infrastructure deployment can now be found in configs at **gke-configuration.sh**. You will then need to deploy the **raycluster-deploy.yaml** to the GKE cluster.
 
-<img src="https://raw.githubusercontent.com/anyscale/foundational-ray-app/refs/heads/main/images/compute.png" width=500>
-
 ### Dependencies
-Start by downloading the dependencies required for this tutorial. Notice in your [`containerfile`](https://raw.githubusercontent.com/anyscale/e2e-llm-workflows/refs/heads/main/containerfile) you have a base image [`anyscale/ray-llm:latest-py311-cu124`](https://hub.docker.com/layers/anyscale/ray-llm/latest-py311-cu124/images/sha256-5a1c55f7f416d2d2eb5f4cdd13afeda25d4f7383406cfee1f1f60da495d1b50f) followed by a list of pip packages. If you're not on [Anyscale](https://console.anyscale.com/), you can pull this Docker image yourself and install the dependencies.
+The Dockerfile and requirements.txt can be used to reliably build an image that provided at *container-images/* 
 
+We can use **Cloud Build** and **Artifact Registry** to build and store our container images.
 
+```yaml
 
-```bash
-%%bash
-# Install dependencies
-pip install -q \
-    "xgrammar==0.1.11" \
-    "pynvml==12.0.0" \
-    "hf_transfer==0.1.9" \
-    "tensorboard==2.19.0" \
-    "llamafactory@git+https://github.com/hiyouga/LLaMA-Factory.git@ac8c6fdd3ab7fb6372f231f238e6b8ba6a17eb16#egg=llamafactory"
 ```
-
-    [92mSuccessfully registered `ray, vllm` and 5 other packages to be installed on all cluster nodes.[0m
-    [92mView and update dependencies here: https://console.anyscale.com/cld_kvedZWag2qA8i5BjxUevf5i7/prj_cz951f43jjdybtzkx1s5sjgz99/workspaces/expwrk_mp8cxvgle2yeumgcpu1yua2r3e?workspace-tab=dependencies[0m
-
 
 ## Data ingestion
 
+The data ingestion process has been revised in this fork to run as a ray job submitted to our cluster. The job is defined in ingest_data.py:
 
 ```python
-import json
-import textwrap
-from IPython.display import Code, Image, display
+import subprocess
+import os
+import time
+
+# The shared path where the GCS bucket is mounted
+VIGGO_PATH = "/mnt/cluster_storage/viggo"
+DATASET_INFO_FILE = os.path.join(VIGGO_PATH, "dataset_info.json")
+
+def run_command(command):
+    """Runs a shell command and raises an exception if it fails."""
+    print(f"Executing: {' '.join(command)}")
+    subprocess.run(" ".join(command), shell=True, check=True)
+
+print("Starting data setup job...")
+
+if os.path.exists(DATASET_INFO_FILE):
+    print(f"Data already exists at {VIGGO_PATH}. Setup is complete.")
+    exit(0)
+
+print(f"Data not found. Starting download to {VIGGO_PATH}...")
+run_command(["mkdir", "-p", VIGGO_PATH])
+
+# --- Download all the required files ---
+urls = {
+    "train.jsonl": "https://viggo-ds.s3.amazonaws.com/train.jsonl",
+    "val.jsonl": "https://viggo-ds.s3.amazonaws.com/val.jsonl",
+    "test.jsonl": "https://viggo-ds.s3.amazonaws.com/test.jsonl",
+    "dataset_info.json": "https://viggo-ds.s3.amazonaws.com/dataset_info.json"
+}
+
+for filename, url in urls.items():
+    output_path = os.path.join(VIGGO_PATH, filename)
+    run_command(["wget", url, "-O", output_path])
+    time.sleep(1) # Small delay to be courteous to the server
+
+print("\nAll files downloaded successfully.")
+print("Data setup job finished.")
 ```
 
-Start by downloading the data from cloud storage to local shared storage.
+We download the files to a the mounted location on our cluster - they will now appear in our bucket.
 
-
-```bash
-%%bash
-rm -rf /mnt/cluster_storage/viggo  # clean up
-mkdir /mnt/cluster_storage/viggo
-wget https://viggo-ds.s3.amazonaws.com/train.jsonl -O /mnt/cluster_storage/viggo/train.jsonl
-wget https://viggo-ds.s3.amazonaws.com/val.jsonl -O /mnt/cluster_storage/viggo/val.jsonl
-wget https://viggo-ds.s3.amazonaws.com/test.jsonl -O /mnt/cluster_storage/viggo/test.jsonl
-wget https://viggo-ds.s3.amazonaws.com/dataset_info.json -O /mnt/cluster_storage/viggo/dataset_info.json
-```
-
-    download: s3://viggo-ds/train.jsonl to ../../../mnt/cluster_storage/viggo/train.jsonl
-    download: s3://viggo-ds/val.jsonl to ../../../mnt/cluster_storage/viggo/val.jsonl
-    download: s3://viggo-ds/test.jsonl to ../../../mnt/cluster_storage/viggo/test.jsonl
-    download: s3://viggo-ds/dataset_info.json to ../../../mnt/cluster_storage/viggo/dataset_info.json
-
-
-
-```bash
-%%bash
-head -n 1 /mnt/cluster_storage/viggo/train.jsonl | python3 -m json.tool
-```
+Below is a single example of the structure of our training data: a JSON file with an instruction field, an input field, and an output field.
 
     {
         "instruction": "Given a target sentence construct the underlying meaning representation of the input sentence as a single function with attributes and attribute values. This function should describe the target string accurately and the function must be one of the following ['inform', 'request', 'give_opinion', 'confirm', 'verify_attribute', 'suggest', 'request_explanation', 'recommend', 'request_attribute']. The attributes must be one of the following: ['name', 'exp_release_date', 'release_year', 'developer', 'esrb', 'rating', 'genres', 'player_perspective', 'has_multiplayer', 'platforms', 'available_on_steam', 'has_linux_release', 'has_mac_release', 'specifier']",
@@ -99,27 +100,7 @@ head -n 1 /mnt/cluster_storage/viggo/train.jsonl | python3 -m json.tool
     }
 
 
-
-```python
-with open("/mnt/cluster_storage/viggo/train.jsonl", "r") as fp:
-    first_line = fp.readline()
-    item = json.loads(first_line)
-system_content = item["instruction"]
-print(textwrap.fill(system_content, width=80))
-```
-
-    Given a target sentence construct the underlying meaning representation of the
-    input sentence as a single function with attributes and attribute values. This
-    function should describe the target string accurately and the function must be
-    one of the following ['inform', 'request', 'give_opinion', 'confirm',
-    'verify_attribute', 'suggest', 'request_explanation', 'recommend',
-    'request_attribute']. The attributes must be one of the following: ['name',
-    'exp_release_date', 'release_year', 'developer', 'esrb', 'rating', 'genres',
-    'player_perspective', 'has_multiplayer', 'platforms', 'available_on_steam',
-    'has_linux_release', 'has_mac_release', 'specifier']
-
-
-You also have an info file that identifies the datasets and format (Alpaca and ShareGPT formats) to use for post training.
+You also have an info file that identifies the datasets and format (Alpaca and ShareGPT formats) to use for post training:
 
 <div class="highlight"><pre><span></span><span class="p">{</span>
 <span class="w">    </span><span class="nt">&quot;viggo-train&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
@@ -155,16 +136,15 @@ Use [Ray Train](https://docs.ray.io/en/latest/train/train.html) + [LLaMA-Factory
 
 ### `config`
 
+Below is an overview of the configuration for our model. We specify:
+ * The model name and 
+ * The method by which we will be tuning (LORA)
+ * The training dataset along with configuration on how the data should be processed.
+ * Output location for logs and checkpoints.
+ * Ray-specific configuration
+ * Training hypterparamters
+ * Evaluation dataset configuration
 
-```python
-import os
-from pathlib import Path
-import yaml
-```
-
-
-```python
-display(Code(filename="lora_sft_ray.yaml", language="yaml"))
 ```
 <div class="highlight"><pre><span></span><span class="c1">### model</span>
 <span class="nt">model_name_or_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Qwen/Qwen2.5-7B-Instruct</span>
@@ -225,19 +205,9 @@ display(Code(filename="lora_sft_ray.yaml", language="yaml"))
 <span class="nt">eval_steps</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">500</span>
 </pre></div>
 
-
-```python
-model_id = "ft-model"  # call it whatever you want
-model_source = yaml.safe_load(open("lora_sft_ray.yaml"))["model_name_or_path"]  # HF model ID, S3 mirror config, or GCS mirror config
-print (model_source)
-```
-
-    Qwen/Qwen2.5-7B-Instruct
-
-
 ### Multi-node training
 
-Use Ray Train + LlamaFactory to perform the mult-node train loop.
+Use Ray Train + LlamaFactory to perform the multi-node train loop.
 
 <div class="alert alert-block alert"> <b>Ray Train</b>
 
@@ -249,20 +219,13 @@ Using [Ray Train](https://docs.ray.io/en/latest/train/train.html) has several ad
 - it supports Data Parallel, Model Parallel, Parameter Server, and even custom strategies.
 - [Ray Compiled graphs](https://docs.ray.io/en/latest/ray-core/compiled-graph/ray-compiled-graph.html) allow you to even define different parallelism for jointly optimizing multiple models. Megatron, DeepSpeed, and similar frameworks only allow for one global setting.
 
-[RayTurbo Train](https://docs.anyscale.com/rayturbo/rayturbo-train) offers even more improvement to the price-performance ratio, performance monitoring, and more:
-- **elastic training** to scale to a dynamic number of workers, and continue training on fewer resources, even on spot instances.
-- **purpose-built dashboard** designed to streamline the debugging of Ray Train workloads:
-    - Monitoring: View the status of training runs and train workers.
-    - Metrics: See insights on training throughput and training system operation time.
-    - Profiling: Investigate bottlenecks, hangs, or errors from individual training worker processes.
-
-<img src="https://raw.githubusercontent.com/anyscale/foundational-ray-app/refs/heads/main/images/train_dashboard.png" width=700>
+Because our RayCluster is already up and running, we can leverage the ray API to submit a job to the RayCluster just like we did for the data ingestion workload.
 
 
 ```bash
 %%bash
 # Run multi-node distributed fine-tuning workload
-USE_RAY=1 llamafactory-cli train lora_sft_ray.yaml
+ray job submit --address http://localhost:8265 --working-dir="." -- bash -c "USE_RAY=1 llamafactory-cli train ray-workloads/lora_sft_ray.yaml"
 ```
 
 
@@ -382,116 +345,6 @@ OSS Ray comes with an extensive observability suite, and Anyscale takes it many 
 - Ray workload specific dashboard, like Data, Train, etc., that can breakdown the tasks. For example, you can observe the preceding training workload live through the Train specific Ray Workloads dashboard:
 
 <img src="https://raw.githubusercontent.com/anyscale/e2e-llm-workflows/refs/heads/main/images/train_dashboard.png" width=700>
-
-
-
-
-### Save to cloud storage
-
-<div class="alert alert-block alert"> <b> 🗂️ Storage on Anyscale</b>
-
-You can always store to data inside [any storage buckets](https://docs.anyscale.com/configuration/storage/#private-storage-buckets) but Anyscale offers a [default storage bucket](https://docs.anyscale.com/configuration/storage/#anyscale-default-storage-bucket) to make things even easier. You also have plenty of other [storage options](https://docs.anyscale.com/configuration/storage/) as well, shared at the cluster, user, and cloud levels.
-
-
-```bash
-%%bash
-# Anyscale default storage bucket.
-echo $ANYSCALE_ARTIFACT_STORAGE
-```
-
-    s3://anyscale-test-data-cld-i2w99rzq8b6lbjkke9y94vi5/org_7c1Kalm9WcX2bNIjW53GUT/cld_kvedZWag2qA8i5BjxUevf5i7/artifact_storage
-
-
-
-```bash
-%%bash
-# Save fine-tuning artifacts to cloud storage.
-STORAGE_PATH="$ANYSCALE_ARTIFACT_STORAGE/viggo"
-LOCAL_OUTPUTS_PATH="/mnt/cluster_storage/viggo/outputs"
-LOCAL_SAVES_PATH="/mnt/cluster_storage/viggo/saves"
-
-# AWS S3 operations.
-if [[ "$STORAGE_PATH" == s3://* ]]; then
-    if aws s3 ls "$STORAGE_PATH" > /dev/null 2>&1; then
-        aws s3 rm "$STORAGE_PATH" --recursive --quiet
-    fi
-    aws s3 cp "$LOCAL_OUTPUTS_PATH" "$STORAGE_PATH/outputs" --recursive --quiet
-    aws s3 cp "$LOCAL_SAVES_PATH" "$STORAGE_PATH/saves" --recursive --quiet
-
-# Google Cloud Storage operations.
-elif [[ "$STORAGE_PATH" == gs://* ]]; then
-    if gsutil ls "$STORAGE_PATH" > /dev/null 2>&1; then
-        gsutil -m -q rm -r "$STORAGE_PATH"
-    fi
-    gsutil -m -q cp -r "$LOCAL_OUTPUTS_PATH" "$STORAGE_PATH/outputs"
-    gsutil -m -q cp -r "$LOCAL_SAVES_PATH" "$STORAGE_PATH/saves"
-
-else
-    echo "Unsupported storage protocol: $STORAGE_PATH"
-    exit 1
-fi
-```
-
-
-```bash
-%%bash
-ls /mnt/cluster_storage/viggo/saves/lora_sft_ray
-```
-
-    TorchTrainer_95d16_00000_0_2025-04-11_14-47-37
-    TorchTrainer_f9e4e_00000_0_2025-04-11_12-41-34
-    basic-variant-state-2025-04-11_12-41-34.json
-    basic-variant-state-2025-04-11_14-47-37.json
-    experiment_state-2025-04-11_12-41-34.json
-    experiment_state-2025-04-11_14-47-37.json
-    trainer.pkl
-    tuner.pkl
-
-
-
-```python
-# LoRA paths.
-save_dir = Path("/mnt/cluster_storage/viggo/saves/lora_sft_ray")
-trainer_dirs = [d for d in save_dir.iterdir() if d.name.startswith("TorchTrainer_") and d.is_dir()]
-latest_trainer = max(trainer_dirs, key=lambda d: d.stat().st_mtime, default=None)
-lora_path = f"{latest_trainer}/checkpoint_000000/checkpoint"
-cloud_lora_path = os.path.join(os.getenv("ANYSCALE_ARTIFACT_STORAGE"), lora_path.split("/mnt/cluster_storage/")[-1])
-dynamic_lora_path, lora_id = cloud_lora_path.rsplit("/", 1)
-print (lora_path)
-print (cloud_lora_path)
-print (dynamic_lora_path)
-print (lora_id)
-```
-
-    /mnt/cluster_storage/viggo/saves/lora_sft_ray/TorchTrainer_95d16_00000_0_2025-04-11_14-47-37/checkpoint_000000/checkpoint
-    s3://anyscale-test-data-cld-i2w99rzq8b6lbjkke9y94vi5/org_7c1Kalm9WcX2bNIjW53GUT/cld_kvedZWag2qA8i5BjxUevf5i7/artifact_storage/viggo/saves/lora_sft_ray/TorchTrainer_95d16_00000_0_2025-04-11_14-47-37/checkpoint_000000/checkpoint
-    s3://anyscale-test-data-cld-i2w99rzq8b6lbjkke9y94vi5/org_7c1Kalm9WcX2bNIjW53GUT/cld_kvedZWag2qA8i5BjxUevf5i7/artifact_storage/viggo/saves/lora_sft_ray/TorchTrainer_95d16_00000_0_2025-04-11_14-47-37/checkpoint_000000
-    checkpoint
-
-
-
-```bash
-%%bash -s "$lora_path"
-ls $1
-```
-
-    README.md
-    adapter_config.json
-    adapter_model.safetensors
-    added_tokens.json
-    merges.txt
-    optimizer.pt
-    rng_state_0.pth
-    rng_state_1.pth
-    rng_state_2.pth
-    rng_state_3.pth
-    scheduler.pt
-    special_tokens_map.json
-    tokenizer.json
-    tokenizer_config.json
-    trainer_state.json
-    training_args.bin
-    vocab.json
 
 
 ## Batch inference
