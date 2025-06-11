@@ -84,12 +84,32 @@ kubectl port-forward $HEAD_POD 8265:8265
 cd gke-ray-llm-workflows
 source myenv/bin/activate
 
-
 # Submit data ingestion job
 ray job submit --address http://localhost:8265 --working_dir: "." -- python ray-workloads/ingest_data.py
 
 # Submit training job
-ray job submit --address http://localhost:8265 --working-dir="." -- bash -c "USE_RAY=1 llamafactory-cli train ray-workloads/lora_sft_ray.yaml"
+ray job submit --address http://localhost:8265 --working-dir="." -- python ray-workloads/train_launcher.py ray-workloads/lora_sft_ray.yaml
 
-ray job submit --address http://localhost:8265 --working-dir="." \
-  -- python ray-workloads/train_launcher.py ray-workloads/lora_sft_ray.yaml 
+# Submit batch inference job
+ray job submit --address http://localhost:8265 --working-dir="." -- python ray-workloads/batch_inference.py
+
+# Submit online inference
+ray job submit --address http://localhost:8265 --working-dir="." -- python ray-workloads/online_inference.py
+
+# Submit requests to online inference service
+export HEAD_POD=$(kubectl get pods --selector=ray.io/node-type=head,ray.io/cluster=raycluster-demo -o jsonpath='{.items[0].metadata.name}')
+kubectl port-forward $HEAD_POD 8000:8000
+
+# In ANOTHER terminal
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "NER_FT_QWEN:checkpoint-93",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Extract the person and location from this sentence: Maria traveled from Berlin to meet her friend."
+      }
+    ],
+    "temperature": 0.2
+  }'

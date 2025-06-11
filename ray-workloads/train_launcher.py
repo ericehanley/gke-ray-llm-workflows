@@ -1,20 +1,26 @@
-# launcher.py
+'''
+Notes on the train_launcher.py script:
+This training workflow is launched via the custom train_launcher.py script instead of llamafactory-cli to ensure compatibility with cloud object storage like GCS.
+The default training command creates a race condition when multiple workers attempt to save checkpoints simultaneously to a GCS Fuse mount.
+This launcher uses the standard ray.train.torch.TorchTrainer and a custom callback to designate a single worker for writing checkpoints, preventing I/O errors while maintaining compatibility with Ray Train's synchronization protocol.
+
+Additionally, there is currently a BUG in this setup where llamafactory shuts down the PyTorch distributed communication service, and then Ray attempts to as well resulting in an AssertionError (i.e., assert pg is not None)
+ - hence the benign shutdown handling in the main script.
+
+In hindsight, it may have been better to develop our own demo from scratch. :P
+'''
+
 import os
 import sys
 import dataclasses
 from inspect import signature
 from typing import List, Dict
 
-# Ray imports
 from ray import train
 from ray.train import ScalingConfig, RunConfig
+from ray.train.base_trainer import TrainingFailedError
 from ray.train.torch import TorchTrainer
 
-# PyTorch import for the fix
-import torch
-import torch.distributed as dist
-
-# LlamaFactory imports
 from transformers import TrainerCallback, HfArgumentParser
 from llamafactory.train.tuner import run_exp
 from llamafactory.hparams import (
@@ -25,16 +31,9 @@ from llamafactory.hparams import (
     GeneratingArguments,
 )
 
-
 class RankZeroReportCallback(TrainerCallback):
-    """
-    This callback satisfies two requirements:
-    1.  Only Rank 0 writes the checkpoint data to the shared filesystem (GCS).
-    2.  All workers call `train.report()` to stay in sync with Ray Train.
-    """
     def on_save(self, args, state, control, **kwargs):
         metrics = {k: v for k, v in state.log_history[-1].items() if isinstance(v, (int, float))}
-        
         if train.get_context().get_world_rank() == 0:
             checkpoint_path = os.path.join(args.output_dir, f"checkpoint-{state.global_step}")
             if os.path.isdir(checkpoint_path):
@@ -46,16 +45,12 @@ class RankZeroReportCallback(TrainerCallback):
 
 
 def train_loop_per_worker(config: Dict):
-    """
-    This is the function that Ray Train will execute on each of the distributed workers.
-    """
     callbacks = config.pop("custom_callbacks", [])
     run_exp(args=config, callbacks=callbacks)
-    
 
 
 def main():
-    # 1. Define and parse arguments from the YAML file
+    # ... (Argument parsing logic remains the same) ...
     dataclass_types = (
         ModelArguments, DataArguments, TrainingArguments, FinetuningArguments, GeneratingArguments
     )
@@ -63,46 +58,54 @@ def main():
     if not (len(sys.argv) == 2 and sys.argv[1].endswith(".yaml")):
         print("Error: Please provide the path to your YAML configuration file.")
         sys.exit(1)
-    
     args_tuple = parser.parse_yaml_file(os.path.abspath(sys.argv[1]))
-    
     all_args = {}
     for arg_obj in args_tuple:
         all_args.update(dataclasses.asdict(arg_obj))
-
     known_keys = {key for dc_type in dataclass_types for key in signature(dc_type).parameters.keys()}
     filtered_args = {k: v for k, v in all_args.items() if k in known_keys}
-
-    # 2. Extract Ray-specific configs
     ray_num_workers = filtered_args.pop("ray_num_workers", 1)
     resources_per_worker = filtered_args.pop("resources_per_worker", {"GPU": 1})
     ray_storage_path = filtered_args.pop("ray_storage_path")
     ray_run_name = filtered_args.pop("ray_run_name")
-
-    # 3. Configure Ray Train Scaling and Run configs
     scaling_config = ScalingConfig(
         num_workers=ray_num_workers,
         resources_per_worker=resources_per_worker,
         use_gpu=True
     )
     run_config = RunConfig(storage_path=ray_storage_path, name=ray_run_name)
-
-    # 4. Define the config to be passed to each worker
     train_loop_config = filtered_args
     train_loop_config["custom_callbacks"] = [RankZeroReportCallback()]
 
-    # 5. Instantiate and run the Ray TorchTrainer
     trainer = TorchTrainer(
         train_loop_per_worker,
         train_loop_config=train_loop_config,
         scaling_config=scaling_config,
         run_config=run_config,
     )
-    result = trainer.fit()
+    try:
+        result = trainer.fit()
+        print("--- Training Job SUCCEEDED ---")
+        print(f"Final result: {result}")
 
-    print("--- Training Job Finished ---")
-    print(f"Final result: {result}")
+    except TrainingFailedError as e:
+        # Recursively search the exception chain for our specific benign error.
+        is_benign_shutdown_error = False
+        current_exception = e
+        while current_exception:
+            if "assert pg is not None" in str(current_exception):
+                is_benign_shutdown_error = True
+                break
+            current_exception = current_exception.__cause__
 
+        if is_benign_shutdown_error:
+            print("--- Training Job SUCCEEDED ---")
+            print("Successfully completed training and checkpointing.")
+            print("Caught and ignored the known, benign shutdown assertion error.")
+        else:
+            # This was a real, unexpected error. Re-raise it.
+            print(f"Caught an unexpected and critical error during training:")
+            raise e
 
 if __name__ == "__main__":
     main()

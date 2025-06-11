@@ -404,32 +404,6 @@ display(Code(filename="/mnt/cluster_storage/viggo/outputs/all_results.json", lan
 
 <img src="https://raw.githubusercontent.com/anyscale/e2e-llm-workflows/refs/heads/main/images/loss.png" width=500>
 
-### Observability
-
-<div class="alert alert-block alert"> <b> 🔎 Monitoring and debugging with Ray</b>
-
-
-OSS Ray offers an extensive [observability suite](https://docs.ray.io/en/latest/ray-observability/index.html) with logs and an observability dashboard that you can use to monitor and debug. The dashboard includes a lot of different components such as:
-
--  memory, utilization, etc., of the tasks running in the [cluster](https://docs.ray.io/en/latest/ray-observability/getting-started.html#dash-node-view)
-
-<img src="https://raw.githubusercontent.com/anyscale/foundational-ray-app/refs/heads/main/images/cluster_util.png" width=700>
-
-- views to see all running tasks, utilization across instance types, autoscaling, etc.
-
-<img src="https://raw.githubusercontent.com/anyscale/foundational-ray-app/refs/heads/main/images/observability_views.png" width=1000>
-
-
-<div class="alert alert-block alert"> <b> 🔎➕➕ Monitoring and debugging on Anyscale</b>
-
-OSS Ray comes with an extensive observability suite, and Anyscale takes it many steps further to make monitoring and debugging your workloads even easier and faster with:
-
-- [unified log viewer](https://docs.anyscale.com/monitoring/accessing-logs/) to see logs from *all* driver and worker processes
-- Ray workload specific dashboard, like Data, Train, etc., that can breakdown the tasks. For example, you can observe the preceding training workload live through the Train specific Ray Workloads dashboard:
-
-<img src="https://raw.githubusercontent.com/anyscale/e2e-llm-workflows/refs/heads/main/images/train_dashboard.png" width=700>
-
-
 ## Batch inference
 [`Overview`](https://docs.ray.io/en/latest/data/working-with-llms.html) |  [`API reference`](https://docs.ray.io/en/latest/data/api/llm.html)
 

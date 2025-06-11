@@ -20,7 +20,7 @@ preprocessing_num_workers: 16
 dataloader_num_workers: 4
 
 ### output
-output_dir: /mnt/cluster_storage/viggo/outputs  # should be somewhere workers have access to (ex. s3, nfs)
+output_dir: /mnt/cluster_storage/viggo/output  # should be somewhere workers have access to (ex. s3, nfs)
 logging_steps: 10
 save_steps: 500
 plot_loss: true
