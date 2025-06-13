@@ -16,7 +16,7 @@ import dataclasses
 from inspect import signature
 from typing import List, Dict
 
-from ray import train
+from ray import train # Import ray.train and required 
 from ray.train import ScalingConfig, RunConfig
 from ray.train.base_trainer import TrainingFailedError
 from ray.train.torch import TorchTrainer
@@ -32,6 +32,10 @@ from llamafactory.hparams import (
 )
 
 class RankZeroReportCallback(TrainerCallback):
+    '''
+    This callback functions as a workaround to prevent an error from a race condition
+    when using Llama Factory. See note above.
+    '''
     def on_save(self, args, state, control, **kwargs):
         metrics = {k: v for k, v in state.log_history[-1].items() if isinstance(v, (int, float))}
         if train.get_context().get_world_rank() == 0:
@@ -45,12 +49,18 @@ class RankZeroReportCallback(TrainerCallback):
 
 
 def train_loop_per_worker(config: Dict):
+    '''
+    Train_loop_per_worker is the fundamental pattern for ray.train.
+    This function executes on each Ray worker. run_exp is the LlamaFactory
+    function that enables distributed training.
+    '''
     callbacks = config.pop("custom_callbacks", [])
     run_exp(args=config, callbacks=callbacks)
 
 
 def main():
-    # ... (Argument parsing logic remains the same) ...
+
+    # LLamaFactory handling and configuration
     dataclass_types = (
         ModelArguments, DataArguments, TrainingArguments, FinetuningArguments, GeneratingArguments
     )
@@ -68,28 +78,45 @@ def main():
     resources_per_worker = filtered_args.pop("resources_per_worker", {"GPU": 1})
     ray_storage_path = filtered_args.pop("ray_storage_path")
     ray_run_name = filtered_args.pop("ray_run_name")
+
+    # Scaling_config is ray train paradigm - defines #workers and resource
+    # configuration per worker.
     scaling_config = ScalingConfig(
         num_workers=ray_num_workers,
         resources_per_worker=resources_per_worker,
         use_gpu=True
     )
-    run_config = RunConfig(storage_path=ray_storage_path, name=ray_run_name)
+    # Run_config defines storage path and logging settings.
+    run_config = RunConfig(storage_path=ray_storage_path,
+        name=ray_run_name
+        )
+
     train_loop_config = filtered_args
     train_loop_config["custom_callbacks"] = [RankZeroReportCallback()]
 
+    '''
+    A Trainer for data parallel PyTorch training.
+    At a high level, this Trainer does the following:
+    Launches multiple workers as defined by the scaling_config.
+    Sets up a distributed PyTorch environment on these workers as defined by the torch_config.
+    Ingests the input datasets based on the dataset_config.
+    Runs the input train_loop_per_worker(train_loop_config) on all workers.
+    '''
     trainer = TorchTrainer(
         train_loop_per_worker,
         train_loop_config=train_loop_config,
         scaling_config=scaling_config,
         run_config=run_config,
     )
+
     try:
-        result = trainer.fit()
+        result = trainer.fit() # Standard approach to calling trainer object and kicking off distributed training
         print("--- Training Job SUCCEEDED ---")
         print(f"Final result: {result}")
 
     except TrainingFailedError as e:
         # Recursively search the exception chain for our specific benign error.
+        # Nothing to see here please move along sir...
         is_benign_shutdown_error = False
         current_exception = e
         while current_exception:

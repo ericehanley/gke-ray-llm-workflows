@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 
+# Import ray.data libraries
 import ray
 from ray.data.llm import vLLMEngineProcessorConfig
 from ray.data.llm import build_llm_processor
@@ -19,6 +20,8 @@ one of the following ['inform', 'request', 'give_opinion', 'confirm',
 lora_path = "/mnt/cluster_storage/viggo/output/checkpoint-93/"
 
 def main():
+    # Configure vLLM settings that should be used for inference
+    # on each actor
     config = vLLMEngineProcessorConfig(
         model_source="Qwen/Qwen2.5-7B-Instruct",
         runtime_env={
@@ -35,18 +38,18 @@ def main():
             "enable_prefix_caching": True,
             "enable_chunked_prefill": True,
             "max_num_batched_tokens": 4096,
-            "max_model_len": 4096,  # or increase KV cache size
-            # complete list: https://docs.vllm.ai/en/stable/serving/engine_args.html
+            "max_model_len": 4096,
         },
         concurrency=1,
         batch_size=16,
         accelerator_type="L4",
     )
 
+    # Create the actual processor
     processor = build_llm_processor(
         config,
         preprocess=lambda row: dict(
-            model=lora_path,  # REMOVE this line if doing inference with just the base model
+            model=lora_path,
             messages=[
                 {"role": "system", "content": system_content},
                 {"role": "user", "content": row["input"]}
@@ -54,21 +57,30 @@ def main():
             sampling_params={
                 "temperature": 0.3,
                 "max_tokens": 250,
-                # complete list: https://docs.vllm.ai/en/stable/api/inference_params.html
             },
         ),
         postprocess=lambda row: {
-            **row,  # all contents
+            **row,
             "generated_output": row["generated_text"],
-            # add additional outputs
         },
     )
 
-    # Execute read/process/output
+    # Data sharding when reading inputs into smaller, blocks across machine
     ds = ray.data.read_json("/mnt/cluster_storage/viggo/test.jsonl")
+
+    # Create a pool of Ray Actors on L4 accelerators
+    # Each parallel actor has a dedicated vLLMEngine based on configuration
+    # Efficiently stream the blocks to each of the actors
     ds = processor(ds)
+
+    # Lazy execution - creates the distributed Dataset object - a blueprint that
+    # is executed in parallel across the environment
     results = ds.take_all()
+
+
     print(f"Example Output: {results[0]}")
+
+    # Write outputs in paralell too!
     ds.write_json("/mnt/cluster_storage/viggo/batch_output.json")
 
 if __name__ == "__main__":

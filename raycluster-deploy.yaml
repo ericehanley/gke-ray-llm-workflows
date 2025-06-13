@@ -1,4 +1,3 @@
-# ray-cluster.runtime-install.yaml
 apiVersion: ray.io/v1
 kind: RayCluster
 metadata:
@@ -7,7 +6,7 @@ spec:
   rayVersion: '2.46.0' # Ray version must be consistent across containers
   headGroupSpec:
     rayStartParams:
-      num-cpus: "0"
+      num-cpus: "0" # Important for production - do not schedule tasks on head node
       dashboard-host: '0.0.0.0'
     template:
       metadata:
@@ -18,20 +17,20 @@ spec:
           gke-gcsfuse/ephemeral-storage-limit: "0"
       spec:
         nodeSelector:
-          cloud.google.com/gke-nodepool: default-pool
-        serviceAccountName: eh-ray-demo
+          cloud.google.com/gke-nodepool: default-pool # Specify default-pool to schedule on n2
+        serviceAccountName: eh-ray-demo-time # Update
         volumes:
         - name: gcs-fuse-volume
           csi:
             driver: gcsfuse.csi.storage.gke.io
             readOnly: false
             volumeAttributes:
-              bucketName: eh-ray-demo
+              bucketName: eh-ray-demo-time # Update
               mountOptions: "uid=1000,gid=1000,file-mode=0775,dir-mode=0775,implicit-dirs"
         containers:
         - name: ray-head
-          image: us-west1-docker.pkg.dev/diesel-patrol-382622/ray-docker-repo/gke-llama-factory@sha256:cb7d998c4f57ea268fac68f416b2233e984ec7ee5d633e60469fdec439f7043d
-          resources:
+          image: us-west1-docker.pkg.dev/diesel-patrol-382622/eh-ray-demo-time/gke-llama-factory:v1 # Update
+          resources: # Request enough resources to run Ray cluster mgmt processes
             limits:
               cpu: "4"
               memory: "16G"
@@ -67,7 +66,7 @@ spec:
       spec:
         nodeSelector:
           cloud.google.com/gke-nodepool: l4singlenodepool
-        serviceAccountName: eh-ray-demo
+        serviceAccountName: eh-ray-demo-time # Update
         tolerations:
         - key: "nvidia.com/gpu"
           operator: "Exists"
@@ -78,11 +77,11 @@ spec:
             driver: gcsfuse.csi.storage.gke.io
             readOnly: false
             volumeAttributes:
-              bucketName: eh-ray-demo
+              bucketName: eh-ray-demo-time
               mountOptions: "uid=1000,gid=1000,file-mode=0775,dir-mode=0775,implicit-dirs"
         containers:
         - name: ray-worker
-          image: us-west1-docker.pkg.dev/diesel-patrol-382622/ray-docker-repo/gke-llama-factory@sha256:cb7d998c4f57ea268fac68f416b2233e984ec7ee5d633e60469fdec439f7043d
+          image: us-west1-docker.pkg.dev/diesel-patrol-382622/eh-ray-demo-time/gke-llama-factory:v1 # Update
           resources:
             limits:
               cpu: "10"

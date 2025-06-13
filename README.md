@@ -2,7 +2,7 @@
 
 This end-to-end tutorial **fine-tunes** an LLM to perform **batch inference** and **online serving** at scale. While entity recognition (NER) is the main task in this tutorial, you can easily extend these end-to-end workflows to any use case.
 
-**This fork has been updated to run specifically on GKE and highlights the functionality of KubeRay CRDs.**
+**This fork has been updated to run specifically on GKE and highlights the functionality of KubeRay CRDs. When in doubt please reference the gke-configuration.sh file for full, direct commands and details**
 
 <img src="https://raw.githubusercontent.com/anyscale/e2e-llm-workflows/refs/heads/main/images/e2e_llm.png" width=800>
 
@@ -41,16 +41,17 @@ git clone https://github.com/ericehanley/gke-ray-llm-workflows.git
 #### Set Environment Variables
 
 ```bash
+# Update these values as needed
 export REGION=us-west1
 export ZONE=us-west1-a
-export PROJECT_ID= #Enter Project_ID
+export PROJECT_ID=diesel-patrol-382622
 export GKE_VERSION=1.32.2-gke.1297002
-export CLUSTER_NAME= #Enter Cluster Name
-export GSBUCKET= #Enter Bucket Name
-export ARTIFACTREPO= #Enter Artifact Registry Repo Name
+export CLUSTER_NAME=eh-ray-demo-time
+export GSBUCKET=eh-ray-demo-time
+export ARTIFACTREPO=eh-ray-demo-time
 export PROJECT_NUMBER=$(gcloud projects describe ${PROJECT_ID} --format="value(projectNumber)")
 export NAMESPACE=default
-export KSA_NAME= #Enter Kubernetes Service Account Name
+export KSA_NAME=eh-ray-demo-time
 export NUM_NODES=1
 export NUM_GPUS_PER_NODE=4
 ```
@@ -109,20 +110,19 @@ We can use **Cloud Build** and **Artifact Registry** to build and store our cont
 
 ```bash
 # Create repository and image
+# Create repository and image
 gcloud artifacts repositories ${ARTIFACTREPO} \
     --repository-format=docker \
     --location=${REGION} \
     --description="Docker repository for Ray applications"
 
-export CLOUD_BUILD_SA="service-${PROJECT_NUMBER}@gcp-sa-cloudbuild.iam.gserviceaccount.com"
+# Create full image name
+export IMAGE_NAME="${REGION}-docker.pkg.dev/${PROJECT_ID}/${ARTIFACTREPO}/gke-llama-factory:v1"
 
-gcloud artifacts repositories add-iam-policy-binding ${ARTIFACTREPO} \
-    --location=${REGION} \
-    --member="serviceAccount:${CLOUD_BUILD_SA}" \
-    --role="roles/artifactregistry.writer"
+# Navigate into repo
+cd gke-ray-llm-workflows
 
-export IMAGE_NAME="${REGION}-docker.pkg.dev/${PROJECT_ID}/ray-docker-repo/gke-llama-factory:v1"
-
+# Build and push image to artifact repo
 gcloud builds submit container-image/ --tag $IMAGE_NAME
 ```
 
@@ -132,13 +132,13 @@ Now we can use the *raycluster-deploy.yaml* file to deploy our RayCluster CRD to
 **NOTE: You MUST manually update the bucket name, kubernetes service account name, and container image name in the raycluster-deploy.yaml file prior to submitting the manifest.**
 
 ```bash
-kubectl apply -f configs/raycluster-deploy.yaml
+kubectl apply -f raycluster-deploy.yaml
 ```
 #### Leverage Virtual Environment for Ray API Calls
 Now we can activate a virtual environment in our terminal to effectively leverage the ray API.
 
 ```bash
-python -m venv myenv
+python -m venv myenv # Ensure venv is properly configured
 source myenv/bin/activate
 pip install -U "ray[data,train,tune,serve]"
 ```
@@ -159,7 +159,9 @@ source myenv/bin/activate
 
 ## Data Ingestion
 
-The data ingestion process has been revised in this fork to run as a ray job submitted to our cluster. The job is defined in *ray-workloads/ingest_data.py*:
+The data ingestion process has been revised in this fork to run as a ray job submitted to our cluster.
+
+The job is defined in *ray-workloads/ingest_data.py*:
 
 ```python
 import subprocess
@@ -311,7 +313,7 @@ Using [Ray Train](https://docs.ray.io/en/latest/train/train.html) has several ad
 Because our RayCluster is already up and running, we can leverage the ray API to submit a job to the RayCluster just like we did for the data ingestion workload.
 
 ```bash
-ray job submit --address http://localhost:8265 --working-dir="." -- bash -c "USE_RAY=1 llamafactory-cli train ray-workloads/lora_sft_ray.yaml"
+ray job submit --address http://localhost:8265 --working-dir="." -- python ray-workloads/train_launcher.py ray-workloads/lora_sft_ray.yaml
 ```
 **Note on the train_launcher.py script:**
 This training workflow is launched via the custom train_launcher.py script instead of *llamafactory-cli* to ensure compatibility with cloud object storage like GCS. The default training command creates a race condition when multiple workers attempt to save checkpoints simultaneously to a GCS Fuse mount. This launcher uses the standard ray.train.torch.TorchTrainer and a custom callback to designate a single worker for writing checkpoints, preventing I/O errors while maintaining compatibility with Ray Train's synchronization protocol.
@@ -382,10 +384,6 @@ This training workflow is launched via the custom train_launcher.py script inste
         ╰─────────────────────────────────────────╯
         Training saved a checkpoint for iteration 1 at: (local)/mnt/cluster_storage/viggo/saves/lora_sft_ray/TorchTrainer_95d16_00000_0_2025-04-11_14-47-37/checkpoint_000000
 
-
-```python
-display(Code(filename="/mnt/cluster_storage/viggo/outputs/all_results.json", language="json"))
-```
 <div class="highlight"><pre><span></span><span class="p">{</span>
 <span class="w">    </span><span class="nt">&quot;epoch&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">4.864</span><span class="p">,</span>
 <span class="w">    </span><span class="nt">&quot;eval_viggo-val_loss&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.13618840277194977</span><span class="p">,</span>
@@ -399,8 +397,6 @@ display(Code(filename="/mnt/cluster_storage/viggo/outputs/all_results.json", lan
 <span class="w">    </span><span class="nt">&quot;train_steps_per_second&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.354</span>
 <span class="p">}</span>
 </pre></div>
-
-
 
 <img src="https://raw.githubusercontent.com/anyscale/e2e-llm-workflows/refs/heads/main/images/loss.png" width=500>
 
@@ -518,111 +514,13 @@ ds = processor(ds)
 results = ds.take_all()
 results[0]
 ```
+### Submitting the Batch Inference Job
 
-
-
-    {
-      "batch_uuid": "d7a6b5341cbf4986bb7506ff277cc9cf",
-      "embeddings": null,
-      "generated_text": "request(esrb)",
-      "generated_tokens": [2035, 50236, 10681, 8, 151645],
-      "input": "Do you have a favorite ESRB content rating?",
-      "instruction": "Given a target sentence construct the underlying meaning representation of the input sentence as a single function with attributes and attribute values. This function should describe the target string accurately and the function must be one of the following ['inform', 'request', 'give_opinion', 'confirm', 'verify_attribute', 'suggest', 'request_explanation', 'recommend', 'request_attribute']. The attributes must be one of the following: ['name', 'exp_release_date', 'release_year', 'developer', 'esrb', 'rating', 'genres', 'player_perspective', 'has_multiplayer', 'platforms', 'available_on_steam', 'has_linux_release', 'has_mac_release', 'specifier']",
-      "messages": [
-        {
-          "content": "Given a target sentence construct the underlying meaning representation of the input sentence as a single function with attributes and attribute values. This function should describe the target string accurately and the function must be one of the following ['inform', 'request', 'give_opinion', 'confirm', 'verify_attribute', 'suggest', 'request_explanation', 'recommend', 'request_attribute']. The attributes must be one of the following: ['name', 'exp_release_date', 'release_year', 'developer', 'esrb', 'rating', 'genres', 'player_perspective', 'has_multiplayer', 'platforms', 'available_on_steam', 'has_linux_release', 'has_mac_release', 'specifier']",
-          "role": "system"
-        },
-        {
-          "content": "Do you have a favorite ESRB content rating?",
-          "role": "user"
-        }
-      ],
-      "metrics": {
-        "arrival_time": 1744408857.148983,
-        "finished_time": 1744408863.09091,
-        "first_scheduled_time": 1744408859.130259,
-        "first_token_time": 1744408862.7087252,
-        "last_token_time": 1744408863.089174,
-        "model_execute_time": null,
-        "model_forward_time": null,
-        "scheduler_time": 0.04162892400017881,
-        "time_in_queue": 1.981276035308838
-      },
-      "model": "/mnt/cluster_storage/viggo/saves/lora_sft_ray/TorchTrainer_95d16_00000_0_2025-04-11_14-47-37/checkpoint_000000/checkpoint",
-      "num_generated_tokens": 5,
-      "num_input_tokens": 164,
-      "output": "request_attribute(esrb[])",
-      "params": "SamplingParams(n=1, presence_penalty=0.0, frequency_penalty=0.0, repetition_penalty=1.0, temperature=0.3, top_p=1.0, top_k=-1, min_p=0.0, seed=None, stop=[], stop_token_ids=[], bad_words=[], include_stop_str_in_output=False, ignore_eos=False, max_tokens=250, min_tokens=0, logprobs=None, prompt_logprobs=None, skip_special_tokens=True, spaces_between_special_tokens=True, truncate_prompt_tokens=None, guided_decoding=None)",
-      "prompt": "<|im_start|>system
-    Given a target sentence construct the underlying meaning representation of the input sentence as a single function with attributes and attribute values. This function should describe the target string accurately and the function must be one of the following ['inform', 'request', 'give_opinion', 'confirm', 'verify_attribute', 'suggest', 'request_explanation', 'recommend', 'request_attribute']. The attributes must be one of the following: ['name', 'exp_release_date', 'release_year', 'developer', 'esrb', 'rating', 'genres', 'player_perspective', 'has_multiplayer', 'platforms', 'available_on_steam', 'has_linux_release', 'has_mac_release', 'specifier']<|im_end|>
-    <|im_start|>user
-    Do you have a favorite ESRB content rating?<|im_end|>
-    <|im_start|>assistant
-    ",
-      "prompt_token_ids": [151644, "...", 198],
-      "request_id": 94,
-      "time_taken_llm": 6.028705836999961,
-      "generated_output": "request(esrb)"
-    }
-
-
-
-
-
-```python
-# Exact match (strict!)
-matches = 0
-for item in results:
-    if item["output"] == item["generated_output"]:
-        matches += 1
-matches / float(len(results))
+```bash
+ray job submit --address http://localhost:8265 --working-dir="." -- python ray-workloads/batch_inference.py
 ```
 
-
-
-
-    0.6879039704524469
-
-
-
-**Note**: The objective of fine-tuning here isn't to create the most performant model but to show that you can leverage it for downstream workloads, like batch inference and online serving at scale. However, you can increase `num_train_epochs` if you want to.
-
-Observe the individual steps in the batch inference workload through the Anyscale Ray Data dashboard:
-
-<img src="https://raw.githubusercontent.com/anyscale/e2e-llm-workflows/refs/heads/main/images/data_dashboard.png" width=1000>
-
-<div class="alert alert-info">
-
-💡 For more advanced guides on topics like optimized model loading, multi-LoRA, OpenAI-compatible endpoints, etc., see [more examples](https://docs.ray.io/en/latest/data/working-with-llms.html) and the [API reference](https://docs.ray.io/en/latest/data/api/llm.html).
-
-</div>
-
 ## Online serving
-[`Overview`](https://docs.ray.io/en/latest/serve/llm/serving-llms.html) | [`API reference`](https://docs.ray.io/en/latest/serve/api/index.html#llm-api)
-
-<img src="https://raw.githubusercontent.com/anyscale/foundational-ray-app/refs/heads/main/images/ray_serve.png" width=600>
-
-`ray.serve.llm` APIs allow users to deploy multiple LLM models together with a familiar Ray Serve API, while providing compatibility with the OpenAI API.
-
-<img src="https://raw.githubusercontent.com/anyscale/e2e-llm-workflows/refs/heads/main/images/serve_llm.png" width=500>
-
-Ray Serve LLM is designed with the following features:
-- Automatic scaling and load balancing
-- Unified multi-node multi-model deployment
-- OpenAI compatibility
-- Multi-LoRA support with shared base models
-- Deep integration with inference engines, vLLM to start
-- Composable multi-model LLM pipelines
-
-[RayTurbo Serve](https://docs.anyscale.com/rayturbo/rayturbo-serve) on Anyscale has more features on top of Ray Serve:
-- **fast autoscaling and model loading** to get services up and running even faster: [5x improvements](https://www.anyscale.com/blog/autoscale-large-ai-models-faster) even for LLMs
-- 54% **higher QPS** and up-to 3x **streaming tokens per second** for high traffic serving use-cases
-- **replica compaction** into fewer nodes where possible to reduce resource fragmentation and improve hardware utilization
-- **zero-downtime** [incremental rollouts](https://docs.anyscale.com/platform/services/update-a-service/#resource-constrained-updates) so your service is never interrupted
-- [**different environments**](https://docs.anyscale.com/platform/services/multi-app/#multiple-applications-in-different-containers) for each service in a multi-serve application
-- **multi availability-zone** aware scheduling of Ray Serve replicas to provide higher redundancy to availability zone failures
-
 
 ### LLM serve config
 
@@ -675,36 +573,38 @@ app = build_openai_app({"llm_configs": [llm_config]})
 serve.run(app)
 ```
 
-    DeploymentHandle(deployment='LLMRouter')
+Submit our endpoint as per usual! **Be sure to update the --dynamic-lora-path to point to your viggo/output/checkpoint-XX location in GCS**.
 
+```bash
+ray job submit --address http://localhost:8265 --working-dir="." -- python ray-workloads/online_inference.py \
+ --dynamic-lora-path gs://${GSBUCKET}/viggo/output/checkpoint-93
+```
 
 ### Service request
 
+Access our endpoint on port 8000:
 
-```python
-# Initialize client.
-client = OpenAI(base_url="http://localhost:8000/v1", api_key="fake-key")
-response = client.chat.completions.create(
-    model=f"{model_id}:{lora_id}",
-    messages=[
-        {"role": "system", "content": "Given a target sentence construct the underlying meaning representation of the input sentence as a single function with attributes and attribute values. This function should describe the target string accurately and the function must be one of the following ['inform', 'request', 'give_opinion', 'confirm', 'verify_attribute', 'suggest', 'request_explanation', 'recommend', 'request_attribute']. The attributes must be one of the following: ['name', 'exp_release_date', 'release_year', 'developer', 'esrb', 'rating', 'genres', 'player_perspective', 'has_multiplayer', 'platforms', 'available_on_steam', 'has_linux_release', 'has_mac_release', 'specifier']"},
-        {"role": "user", "content": "Blizzard North is mostly an okay developer, but they released Diablo II for the Mac and so that pushes the game from okay to good in my view."},
-    ],
-    stream=True
-)
-for chunk in response:
-    if chunk.choices[0].delta.content is not None:
-        print(chunk.choices[0].delta.content, end="", flush=True)
+```bash
+export HEAD_POD=$(kubectl get pods --selector=ray.io/node-type=head,ray.io/cluster=raycluster-demo -o jsonpath='{.items[0].metadata.name}')
+kubectl port-forward $HEAD_POD 8000:8000
 ```
 
+And then send requests to the endpoint in a separate terminal:
 
-
-    Avg prompt throughput: 20.3 tokens/s, Avg generation throughput: 0.1 tokens/s, Running: 1 reqs, Swapped: 0 reqs, Pending: 0 reqs, GPU KV cache usage: 0.3%, CPU KV cache usage: 0.0%.
-
-    _opinion(name[Diablo II], developer[Blizzard North], rating[good], has_mac_release[yes])
-
-
-
+```bash
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "NER_FT_QWEN:checkpoint-93",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Extract the person and location from this sentence: Maria traveled from Berlin to meet her friend."
+      }
+    ],
+    "temperature": 0.2
+  }'
+```
 
 And of course, you can observe the running service, the deployments, and metrics like QPS, latency, etc., through the [Ray Dashboard](https://docs.ray.io/en/latest/ray-observability/getting-started.html)'s [Serve view](https://docs.ray.io/en/latest/ray-observability/getting-started.html#dash-serve-view):
 
@@ -714,49 +614,9 @@ And of course, you can observe the running service, the deployments, and metrics
 
 💡 See [more examples](https://docs.ray.io/en/latest/serve/llm/overview.html) and the [API reference](https://docs.ray.io/en/latest/serve/llm/api.html) for advanced guides on topics like structured outputs (like JSON), vision LMs, multi-LoRA on shared base models, using other inference engines (like `sglang`), fast model loading, etc.
 
-</div>
+## Next Steps!
 
-```python
-# Shutdown the service
-serve.shutdown()
-```
+As an additional exercise, tear down your RayCluster and see if you can update these workflows to run as RayJob or RayCluster CRDs. See examples here:
 
-## Production
+https://github.com/ray-project/kuberay/tree/master/ray-operator/config/samples
 
-Seamlessly integrate with your existing CI/CD pipelines by leveraging the Anyscale [CLI](https://docs.anyscale.com/reference/quickstart-cli) or [SDK](https://docs.anyscale.com/reference/quickstart-sdk) to run [reliable batch jobs](https://docs.anyscale.com/platform/jobs) and deploy [highly available services](https://docs.anyscale.com/platform/services). Given you've been developing in an environment that's almost identical to production with a multi-node cluster, this integration should drastically speed up your dev to prod velocity.
-
-<img src="https://raw.githubusercontent.com/anyscale/foundational-ray-app/refs/heads/main/images/cicd.png" width=600>
-
-### Jobs
-
-[Anyscale Jobs](https://docs.anyscale.com/platform/jobs/) ([API ref](https://docs.anyscale.com/reference/job-api/)) allows you to execute discrete workloads in production such as batch inference, embeddings generation, or model fine-tuning.
-- [define and manage](https://docs.anyscale.com/platform/jobs/manage-jobs) your Jobs in many different ways, like CLI and Python SDK
-- set up [queues](https://docs.anyscale.com/platform/jobs/job-queues) and [schedules](https://docs.anyscale.com/platform/jobs/schedules)
-- set up all the [observability, alerting, etc.](https://docs.anyscale.com/platform/jobs/monitoring-and-debugging) around your Jobs
-
-<img src="https://raw.githubusercontent.com/anyscale/foundational-ray-app/refs/heads/main/images/job_result.png" width=700>
-
-### Services
-
-[Anyscale Services](https://docs.anyscale.com/platform/services/) ([API ref](https://docs.anyscale.com/reference/service-api/)) offers an extremely fault tolerant, scalable, and optimized way to serve your Ray Serve applications:
-- you can [rollout and update](https://docs.anyscale.com/platform/services/update-a-service) services with canary deployment with zero-downtime upgrades
-- [monitor](https://docs.anyscale.com/platform/services/monitoring) your Services through a dedicated Service page, unified log viewer, tracing, set up alerts, etc.
-- scale a service (`num_replicas=auto`) and utilize replica compaction to consolidate nodes that are fractionally utilized
-- [head node fault tolerance](https://docs.anyscale.com/platform/services/production-best-practices#head-node-ft) because OSS Ray recovers from failed workers and replicas but not head node crashes
-- serving [multiple applications](https://docs.anyscale.com/platform/services/multi-app) in a single Service
-
-<img src="https://raw.githubusercontent.com/anyscale/foundational-ray-app/refs/heads/main/images/canary.png" width=700>
-
-
-
-```bash
-%%bash
-# clean up
-rm -rf /mnt/cluster_storage/viggo
-STORAGE_PATH="$ANYSCALE_ARTIFACT_STORAGE/viggo"
-if [[ "$STORAGE_PATH" == s3://* ]]; then
-    aws s3 rm "$STORAGE_PATH" --recursive --quiet
-elif [[ "$STORAGE_PATH" == gs://* ]]; then
-    gsutil -m -q rm -r "$STORAGE_PATH"
-fi
-```

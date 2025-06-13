@@ -1,3 +1,5 @@
+# Simple script to download viggo dataset to /mnt/cluster_storage/viggo
+# which is mounted to GCS via GCSFUSEDRIVER
 import subprocess
 import os
 import time

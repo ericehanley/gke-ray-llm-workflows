@@ -1,13 +1,13 @@
 export REGION=us-west1
 export ZONE=us-west1-a
-export PROJECT_ID=
+export PROJECT_ID=diesel-patrol-382622
 export GKE_VERSION=1.32.2-gke.1297002
-export CLUSTER_NAME=
-export GSBUCKET=
-export ARTIFACTREPO=
+export CLUSTER_NAME=eh-ray-demo-time
+export GSBUCKET=eh-ray-demo-time
+export ARTIFACTREPO=eh-ray-demo-time
 export PROJECT_NUMBER=$(gcloud projects describe ${PROJECT_ID} --format="value(projectNumber)")
 export NAMESPACE=default
-export KSA_NAME=
+export KSA_NAME=eh-ray-demo-time
 export NUM_NODES=1
 export NUM_GPUS_PER_NODE=4
 
@@ -53,22 +53,20 @@ gcloud artifacts repositories ${ARTIFACTREPO} \
     --location=${REGION} \
     --description="Docker repository for Ray applications"
 
-export CLOUD_BUILD_SA="service-${PROJECT_NUMBER}@gcp-sa-cloudbuild.iam.gserviceaccount.com"
+# Create full image name
+export IMAGE_NAME="${REGION}-docker.pkg.dev/${PROJECT_ID}/${ARTIFACTREPO}/gke-llama-factory:v1"
 
-gcloud artifacts repositories add-iam-policy-binding ${ARTIFACTREPO} \
-    --location=${REGION} \
-    --member="serviceAccount:${CLOUD_BUILD_SA}" \
-    --role="roles/artifactregistry.writer"
+# Navigate into repo
+cd gke-ray-llm-workflows
 
-export IMAGE_NAME="${REGION}-docker.pkg.dev/${PROJECT_ID}/ray-docker-repo/gke-llama-factory:v1"
-
+# Build and push image to artifact repo
 gcloud builds submit container-image/ --tag $IMAGE_NAME
 
-# Deploy RayCluster - UPDATE CONTAINER IMAGE, BUCKET AND KSA MANUALLY
-kubectl apply -f configs/raycluster-deploy.yaml
+# UPDATE CONTAINER IMAGE, BUCKET AND KSA MANUALLY IN raycluster-deploy.yaml
+kubectl apply -f raycluster-deploy.yaml
 
 # Leverage virtual environment and install ray API locally to run jobs
-python -m venv myenv #update apt as needed
+python -m venv myenv # ensure venv is properly configured
 source myenv/bin/activate
 pip install -U "ray[data,train,tune,serve]"
 
@@ -83,9 +81,10 @@ kubectl port-forward $HEAD_POD 8265:8265
 # In separate terminal, activate venv and submit job to RayCluster
 cd gke-ray-llm-workflows
 source myenv/bin/activate
+export GSBUCKET=eh-ray-demo-time # will need to set bucket for serve endpoint
 
 # Submit data ingestion job
-ray job submit --address http://localhost:8265 --working_dir: "." -- python ray-workloads/ingest_data.py
+ray job submit --address http://localhost:8265 --working-dir="." -- python ray-workloads/ingest_data.py
 
 # Submit training job
 ray job submit --address http://localhost:8265 --working-dir="." -- python ray-workloads/train_launcher.py ray-workloads/lora_sft_ray.yaml
@@ -94,7 +93,8 @@ ray job submit --address http://localhost:8265 --working-dir="." -- python ray-w
 ray job submit --address http://localhost:8265 --working-dir="." -- python ray-workloads/batch_inference.py
 
 # Submit online inference
-ray job submit --address http://localhost:8265 --working-dir="." -- python ray-workloads/online_inference.py
+ray job submit --address http://localhost:8265 --working-dir="." -- python ray-workloads/online_inference.py \
+ --dynamic-lora-path gs://${GSBUCKET}/viggo/output/checkpoint-93
 
 # Submit requests to online inference service
 export HEAD_POD=$(kubectl get pods --selector=ray.io/node-type=head,ray.io/cluster=raycluster-demo -o jsonpath='{.items[0].metadata.name}')
