@@ -217,7 +217,7 @@ Below is a single example of the structure of our training data: a JSON file wit
 In our new terminal from the set up above, we can now submit our jobs with a simple one line command:
 
 ```bash
-ray job submit --address http://localhost:8265 --working_dir: "." -- python ray-workloads/ingest_data.py
+ray job submit --address http://localhost:8265 --working-dir "." -- python ray-workloads/ingest_data.py
 ```
 
 ## Distributed fine-tuning
